@@ -8,7 +8,7 @@
  */
 
 import { css } from '@emotion/css';
-import { Button, Input } from 'antd';
+import { Button, Input, Space } from 'antd';
 import React, { useRef, useState } from 'react';
 import { VariableSelect } from './VariableSelect';
 
@@ -25,7 +25,15 @@ function setNativeInputValue(input, value) {
 
 export function RawTextArea(props): JSX.Element {
   const inputRef = useRef<any>(null);
-  const { changeOnSelect, component: Component = Input.TextArea, fieldNames, scope, buttonClass, ...others } = props;
+  const {
+    changeOnSelect,
+    component: Component = Input.TextArea,
+    fieldNames,
+    scope,
+    buttonClass,
+    delimiters = ['{{', '}}'],
+    ...others
+  } = props;
   const dataScope = typeof scope === 'function' ? scope() : scope;
   const [options, setOptions] = useState(dataScope ? dataScope : []);
 
@@ -34,7 +42,7 @@ export function RawTextArea(props): JSX.Element {
       return;
     }
 
-    const variable = `{{${selected.join('.')}}}`;
+    const variable = `${delimiters[0]}${selected.join('.')}${delimiters[1]}`;
 
     const { textArea } = inputRef.current.resizableTextArea;
     const nextValue =
@@ -54,7 +62,7 @@ export function RawTextArea(props): JSX.Element {
       `}
     >
       <Component {...others} ref={inputRef} />
-      <Button.Group
+      <Space.Compact
         className={css`
           position: absolute;
           right: 0;
@@ -82,7 +90,7 @@ export function RawTextArea(props): JSX.Element {
           changeOnSelect={changeOnSelect}
           disabled={others.disabled}
         />
-      </Button.Group>
+      </Space.Compact>
     </div>
   );
 }

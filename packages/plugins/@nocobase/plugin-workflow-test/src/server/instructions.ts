@@ -87,7 +87,7 @@ export default {
 
   asyncResume: {
     async run(node, input, processor) {
-      const job = await processor.saveJob({
+      const job = processor.saveJob({
         status: 0,
         nodeId: node.id,
         nodeKey: node.key,
@@ -100,7 +100,7 @@ export default {
         });
 
         processor.options.plugin.resume(job);
-      }, 100);
+      }, node.config.duration ?? 100);
 
       return null;
     },

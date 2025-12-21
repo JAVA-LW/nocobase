@@ -7,6 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+import { fn, col } from 'sequelize';
 import { Model, Transaction, Transactionable } from '@nocobase/database';
 import { appendArrayColumn } from '@nocobase/evaluators';
 import { Logger } from '@nocobase/logger';
@@ -54,7 +55,7 @@ export default class Processor {
   /**
    * @experimental
    */
-  nodesMap = new Map<number, FlowNodeModel>();
+  nodesMap = new Map<number | string, FlowNodeModel>();
 
   private jobsMapByNodeKey: { [key: string]: JobModel } = {};
   private jobResultsMapByNodeKey: { [key: string]: any } = {};
@@ -93,11 +94,15 @@ export default class Processor {
   }
 
   private makeJobs(jobs: Array<JobModel>) {
-    jobs.forEach((job) => {
+    for (const job of jobs) {
       const node = this.nodesMap.get(job.nodeId);
+      if (!node) {
+        this.logger.warn(`node (#${job.nodeId}) not found for job (#${job.id}), this will lead to unexpected error`);
+        continue;
+      }
       this.jobsMapByNodeKey[node.key] = job;
       this.jobResultsMapByNodeKey[node.key] = job.result;
-    });
+    }
   }
 
   public async prepare() {
@@ -115,12 +120,25 @@ export default class Processor {
         plugin.enabledCache.get(execution.workflowId) || (await execution.getWorkflow({ transaction }));
     }
 
-    const nodes = await execution.workflow.getNodes({ transaction });
+    const nodes = execution.workflow.nodes || (await execution.workflow.getNodes({ transaction }));
     execution.workflow.nodes = nodes;
 
     this.makeNodes(nodes);
 
+    const JobDBModel = plugin.db.getModel('jobs');
+    const jobIds = await JobDBModel.findAll({
+      attributes: ['executionId', 'nodeId', [fn('MAX', col('id')), 'id']],
+      group: ['executionId', 'nodeId'],
+      where: {
+        executionId: execution.id,
+      },
+      raw: true,
+      transaction,
+    });
     const jobs = await execution.getJobs({
+      where: {
+        id: jobIds.map((item) => item.id),
+      },
       order: [['id', 'ASC']],
       transaction,
     });
@@ -132,8 +150,10 @@ export default class Processor {
 
   public async start() {
     const { execution } = this;
-    if (execution.status !== EXECUTION_STATUS.STARTED) {
-      this.logger.warn(`execution was ended with status ${execution.status} before, could not be started again`);
+    if (execution.status) {
+      this.logger.warn(`execution was ended with status ${execution.status} before, could not be started again`, {
+        workflowId: execution.workflowId,
+      });
       return;
     }
     await this.prepare();
@@ -147,8 +167,10 @@ export default class Processor {
 
   public async resume(job: JobModel) {
     const { execution } = this;
-    if (execution.status !== EXECUTION_STATUS.STARTED) {
-      this.logger.warn(`execution was ended with status ${execution.status} before, could not be resumed`);
+    if (execution.status) {
+      this.logger.warn(`execution was ended with status ${execution.status} before, could not be resumed`, {
+        workflowId: execution.workflowId,
+      });
       return;
     }
     await this.prepare();
@@ -160,17 +182,19 @@ export default class Processor {
     let job;
     try {
       // call instruction to get result and status
-      this.logger.info(`execution (${this.execution.id}) run instruction [${node.type}] for node (${node.id})`);
-      this.logger.debug(`config of node`, { data: node.config });
+      this.logger.debug(`config of node`, { data: node.config, workflowId: node.workflowId });
       job = await instruction(node, prevJob, this);
-      if (!job) {
+      if (job === null) {
         return this.exit();
+      }
+      if (!job) {
+        return this.exit(true);
       }
     } catch (err) {
       // for uncaught error, set to error
       this.logger.error(
         `execution (${this.execution.id}) run instruction [${node.type}] for node (${node.id}) failed: `,
-        err,
+        { error: err, workflowId: node.workflowId },
       );
       job = {
         result:
@@ -198,6 +222,9 @@ export default class Processor {
 
     this.logger.info(
       `execution (${this.execution.id}) run instruction [${node.type}] for node (${node.id}) finished as status: ${savedJob.status}`,
+      {
+        workflowId: node.workflowId,
+      },
     );
     this.logger.debug(`result of node`, { data: savedJob.result });
 
@@ -221,6 +248,9 @@ export default class Processor {
       return Promise.reject(new Error('`run` should be implemented for customized execution of the node'));
     }
 
+    this.logger.info(`execution (${this.execution.id}) run instruction [${node.type}] for node (${node.id})`, {
+      workflowId: node.workflowId,
+    });
     return this.exec(instruction.run.bind(instruction), node, input);
   }
 
@@ -230,7 +260,9 @@ export default class Processor {
     const parentNode = this.findBranchParentNode(node);
     // no parent, means on main flow
     if (parentNode) {
-      this.logger.debug(`not on main, recall to parent entry node (${node.id})})`);
+      this.logger.debug(`not on main, recall to parent entry node (${node.id})})`, {
+        workflowId: node.workflowId,
+      });
       await this.recall(parentNode, job);
       return null;
     }
@@ -252,17 +284,41 @@ export default class Processor {
       );
     }
 
+    this.logger.info(`execution (${this.execution.id}) resume instruction [${node.type}] for node (${node.id})`, {
+      workflowId: node.workflowId,
+    });
     return this.exec(instruction.resume.bind(instruction), node, job);
   }
 
-  public async exit(s?: number) {
+  public async exit(s?: number | true) {
+    if (s === true) {
+      return;
+    }
     if (this.jobsToSave.size) {
       const newJobs = [];
       for (const job of this.jobsToSave.values()) {
         if (job.isNewRecord) {
           newJobs.push(job);
         } else {
-          await job.save({ transaction: this.mainTransaction });
+          const JobCollection = this.options.plugin.db.getCollection('jobs');
+          const changes = [];
+          if (job.changed('status')) {
+            changes.push([`status`, job.status]);
+            job.changed('status', false);
+          }
+          if (job.changed('result')) {
+            changes.push([`result`, JSON.stringify(job.result ?? null)]);
+            job.changed('result', false);
+          }
+          if (changes.length) {
+            await this.options.plugin.db.sequelize.query(
+              `UPDATE ${JobCollection.quotedTableName()} SET ${changes.map(([key]) => `${key} = ?`)} WHERE id='${
+                job.id
+              }'`,
+              { replacements: changes.map(([, value]) => value), transaction: this.mainTransaction },
+            );
+          }
+          // await job.save({ transaction: this.mainTransaction });
         }
       }
       if (newJobs.length) {
@@ -287,7 +343,9 @@ export default class Processor {
     if (this.mainTransaction && this.mainTransaction !== this.transaction) {
       await this.mainTransaction.commit();
     }
-    this.logger.info(`execution (${this.execution.id}) exiting with status ${this.execution.status}`);
+    this.logger.info(`execution (${this.execution.id}) exiting with status ${this.execution.status}`, {
+      workflowId: this.execution.workflowId,
+    });
     return null;
   }
 
@@ -302,19 +360,27 @@ export default class Processor {
       job = payload;
       job.set('updatedAt', new Date());
     } else {
-      job = model.build({
-        ...payload,
-        id: this.options.plugin.snowflake.getUniqueID().toString(),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        executionId: this.execution.id,
-      });
+      job = model.build(
+        {
+          ...payload,
+          id: this.options.plugin.snowflake.getUniqueID().toString(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          executionId: this.execution.id,
+        },
+        {
+          isNewRecord: true,
+        },
+      );
     }
     this.jobsToSave.set(job.id, job);
 
     this.lastSavedJob = job;
     this.jobsMapByNodeKey[job.nodeKey] = job;
     this.jobResultsMapByNodeKey[job.nodeKey] = job.result;
+    this.logger.debug(`job added to save list: ${JSON.stringify(job)}`, {
+      workflowId: this.execution.workflowId,
+    });
 
     return job;
   }
@@ -388,14 +454,14 @@ export default class Processor {
     for (let n = this.findBranchEndNode(node); n && n !== node.upstream; n = n.upstream) {
       branchJobs.push(...allJobs.filter((item) => item.nodeId === n.id));
     }
-    branchJobs.sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime());
+    branchJobs.sort((a, b) => a.id - b.id);
     return branchJobs[branchJobs.length - 1] || null;
   }
 
   /**
    * @experimental
    */
-  public getScope(sourceNodeId: number, includeSelfScope = false) {
+  public getScope(sourceNodeId?: number | string, includeSelfScope = false) {
     const node = this.nodesMap.get(sourceNodeId);
     const systemFns = {};
     const scope = {
@@ -426,7 +492,11 @@ export default class Processor {
   /**
    * @experimental
    */
-  public getParsedValue(value, sourceNodeId: number, { additionalScope = {}, includeSelfScope = false } = {}) {
+  public getParsedValue(
+    value,
+    sourceNodeId?: number | string,
+    { additionalScope = {}, includeSelfScope = false } = {},
+  ) {
     const template = parse(value);
     const scope = Object.assign(this.getScope(sourceNodeId, includeSelfScope), additionalScope);
     template.parameters.forEach(({ key }) => {

@@ -7,18 +7,61 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { SchemaComponent, useAPIClient, useFormBlockContext } from '@nocobase/client';
-import { Card, Typography, Spin, message, Input, Button } from 'antd';
+import { Card, Typography, Spin, message, Input, Button, Alert, Modal } from 'antd';
 import { useAsyncEffect } from 'ahooks';
 import { useT } from './locale';
+import { CopyOutlined } from '@ant-design/icons';
+import { ServiceValidate } from './ServiceValidate';
+import { useForm } from '@formily/react';
+import { useSubmitProps } from './useSubmitProps';
+import { LicenseSettingContext } from './LicenseSettingContext';
 
-const { Paragraph } = Typography;
+const copyTextToClipboard = ({
+  text,
+  onSuccess,
+  onError,
+}: {
+  text: string;
+  onSuccess?: () => void;
+  onError?: () => void;
+}) => {
+  if (!navigator.clipboard) {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    // Avoid scrolling to bottom
+    textArea.style.top = '0';
+    textArea.style.left = '0';
+    textArea.style.position = 'fixed';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      document.execCommand('copy');
+      onSuccess?.();
+    } catch (err) {
+      onError?.();
+    }
+    document.body.removeChild(textArea);
+    return;
+  }
+  navigator.clipboard
+    .writeText(text)
+    .then(() => {
+      onSuccess?.();
+    })
+    .catch((e) => {
+      console.error(e);
+      onError?.();
+    });
+};
 
 function InstanceId() {
   const api = useAPIClient();
   const [loading, setLoading] = useState(false);
   const [instanceId, setInstanceId] = useState('');
+  const t = useT();
 
   const getInstanceId = async () => {
     setLoading(true);
@@ -32,79 +75,55 @@ function InstanceId() {
         setLoading(false);
       });
   };
-  useAsyncEffect(async () => {
-    const id = await getInstanceId();
-    setInstanceId(id);
-  }, []);
 
   return (
-    <Spin spinning={loading}>
-      <Paragraph copyable ellipsis>
-        {instanceId}
-      </Paragraph>
-    </Spin>
+    <Button
+      onClick={async () => {
+        const id = await getInstanceId();
+        copyTextToClipboard({
+          text: id,
+          onSuccess: () => {
+            message.success(t('Copied'));
+          },
+          onError: () => {
+            message.error(t('Failed to copy, please open ./storage/.license/instance-id and copy it'));
+          },
+        });
+      }}
+      loading={loading}
+      icon={<CopyOutlined />}
+      type="link"
+    >
+      {t('Copy')}
+    </Button>
   );
 }
 
-const useSubmitProps = () => {
-  const api = useAPIClient();
-  const [loading, setLoading] = useState(false);
-  const ctx = useFormBlockContext();
+const TextArea = ({ ...props }) => {
+  const [isEdit, setIsEdit] = useState(false);
+  const form = useForm();
   const t = useT();
-
-  const saveLicenseKey = async (licenseKey: string) => {
-    setLoading(true);
-    try {
-      await api.request({
-        url: '/license:license-key',
-        method: 'POST',
-        data: {
-          licenseKey,
-        },
-      });
-      setLoading(false);
-      message.success(t('License key saved successfully, please re-run the plugin installation.'));
-    } catch (e) {
-      setLoading(false);
-    }
-  };
-
-  return {
-    loading,
-    onClick: async () => {
-      await ctx.form?.validate();
-      const licenseKey = ctx.form?.values?.licenseKey;
-      await saveLicenseKey(licenseKey);
-    },
-  };
-};
-
-const TextArea = (props) => {
-  const [isExists, setIsExists] = useState(false);
-  const api = useAPIClient();
-  const ctx = useFormBlockContext();
-  const t = useT();
+  const { keyExist } = React.useContext(LicenseSettingContext);
   useAsyncEffect(async () => {
-    const res = await api.request({
-      url: '/license:is-exists',
-      method: 'GET',
-    });
-    if (res?.data?.data) {
-      ctx.form?.setFieldState('footer', (state) => {
-        state.visible = false;
+    if (keyExist === false) {
+      setIsEdit(true);
+      form?.setFieldState('footer', (state) => {
+        state.visible = true;
       });
     }
-    setIsExists(res?.data?.data);
-  }, []);
+  }, [keyExist]);
 
-  if (isExists) {
+  if (isEdit) {
+    return <Input.TextArea rows={4} {...props} />;
+  }
+  if (keyExist) {
     return (
       <>
         {t('License key has been set')}&nbsp;
         <Button
           onClick={() => {
-            setIsExists(false);
-            ctx.form?.setFieldState('footer', (state) => {
+            setIsEdit(true);
+            form?.setFieldState('footer', (state) => {
               state.visible = true;
             });
           }}
@@ -114,24 +133,50 @@ const TextArea = (props) => {
       </>
     );
   }
-  return <Input.TextArea rows={4} {...props} />;
+  return null;
+};
+
+const LicenseCardWarp = () => {
+  const { keyExist, refreshToken } = React.useContext(LicenseSettingContext);
+  if (!keyExist) {
+    return null;
+  }
+  return (
+    <SchemaComponent
+      key={refreshToken}
+      schema={{
+        type: 'void',
+        properties: {
+          card: {
+            type: 'void',
+            'x-component': 'LicenseCard',
+          },
+        },
+      }}
+    />
+  );
 };
 
 export default function LicenseSetting() {
   const t = useT();
+  const [renderKey, setRenderKey] = useState(0);
+  const [keyExist, setKeyExist] = useState(null);
+  const api = useAPIClient();
+
+  useAsyncEffect(async () => {
+    const res = await api.request({
+      url: '/license:is-exists',
+      method: 'GET',
+    });
+    setKeyExist(res?.data?.data);
+  }, []);
 
   const createLabelSchema = {
     type: 'void',
-    'x-decorator': 'FormBlockProvider',
-    'x-decorator-props': {
-      dataSource: 'main',
-      collection: 'users',
-    },
+    'x-decorator': 'Form',
     properties: {
       form: {
         type: 'void',
-        'x-component': 'FormV2',
-        'x-use-component-props': 'useFormBlockProps',
         properties: {
           label: {
             type: 'string',
@@ -160,26 +205,49 @@ export default function LicenseSetting() {
                 'x-use-component-props': 'useSubmitProps',
                 'x-component-props': {
                   type: 'primary',
+                  style: {
+                    marginBottom: 16,
+                  },
                 },
               },
             },
+            'x-visible': false,
+          },
+          licenseInfo: {
+            type: 'void',
+            // title: 'NocoBase ' + t('License information'),
+            'x-component': 'LicenseCardWarp',
+            // 'x-decorator': 'FormItem',
           },
         },
       },
     },
   };
+
   return (
     <Card bordered={false}>
-      <SchemaComponent
-        scope={{ useSubmitProps }}
-        components={{ InstanceId, TextArea }}
-        schema={{
-          type: 'void',
-          properties: {
-            form: createLabelSchema,
+      <LicenseSettingContext.Provider
+        value={{
+          onSaveSuccess: () => {
+            setRenderKey((k) => k + 1);
+            setKeyExist(true);
           },
+          keyExist,
+          refreshToken: renderKey,
         }}
-      />
+      >
+        <ServiceValidate refreshToken={renderKey} />
+        <SchemaComponent
+          scope={{ useSubmitProps }}
+          components={{ InstanceId, TextArea, LicenseCardWarp }}
+          schema={{
+            type: 'void',
+            properties: {
+              form: createLabelSchema,
+            },
+          }}
+        />
+      </LicenseSettingContext.Provider>
     </Card>
   );
 }

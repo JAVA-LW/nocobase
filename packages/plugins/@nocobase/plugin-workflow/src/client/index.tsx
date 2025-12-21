@@ -35,6 +35,7 @@ import { getWorkflowDetailPath, getWorkflowExecutionsPath } from './utils';
 import { VariableOption } from './variable';
 import {
   MobileTabBarWorkflowTasksItem,
+  TasksCountsProvider,
   TasksProvider,
   tasksSchemaInitializerItem,
   TaskTypeOptions,
@@ -114,7 +115,7 @@ export default class PluginWorkflowClient extends Plugin {
   }
 
   registerTaskType(key: string, option: TaskTypeOptions) {
-    this.taskTypes.register(key, option);
+    this.taskTypes.register(key, { ...option, key });
   }
 
   async load() {
@@ -147,20 +148,22 @@ export default class PluginWorkflowClient extends Plugin {
     });
 
     this.router.add('admin.workflow.tasks', {
-      path: '/admin/workflow/tasks/:taskType/:status/:popupId?',
+      path: '/admin/workflow/tasks/:taskType?/:status?/:popupId?',
       Component: WorkflowTasks,
     });
 
     const mobileManager = this.pm.get(MobileManager);
     this.app.schemaInitializerManager.addItem('mobile:tab-bar', 'workflow-tasks', tasksSchemaInitializerItem);
-    this.app.addComponents({ MobileTabBarWorkflowTasksItem });
+    this.app.addComponents({ TasksCountsProvider, MobileTabBarWorkflowTasksItem });
     if (mobileManager.mobileRouter) {
-      mobileManager.mobileRouter.add('mobile.page.workflow', {
-        path: '/page/workflow',
-      });
-      mobileManager.mobileRouter.add('mobile.page.workflow.tasks', {
-        path: '/page/workflow/tasks/:taskType/:status/:popupId?',
-        Component: observer(WorkflowTasksMobile, { displayName: 'WorkflowTasksMobile' }),
+      const MobileComponent = observer(WorkflowTasksMobile, { displayName: 'WorkflowTasksMobile' });
+      // mobileManager.mobileRouter.add('mobile.page.workflow.tasks', {
+      //   path: '/page/workflow-tasks',
+      //   Component: MobileComponent,
+      // });
+      mobileManager.mobileRouter.add('mobile.page.workflow.tasks.list', {
+        path: '/page/workflow-tasks/:taskType?/:status?/:popupId?',
+        Component: MobileComponent,
       });
     }
 

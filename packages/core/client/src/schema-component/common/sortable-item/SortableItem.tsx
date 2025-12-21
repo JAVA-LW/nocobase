@@ -60,7 +60,6 @@ export const Sortable = (props: any) => {
       className: cx('nb-sortable-designer', props.className),
       ref: setNodeRef,
       style: droppableStyle,
-      setNodeRef,
     },
     children,
   );
@@ -97,7 +96,7 @@ const InternalSortableItem = observer(
     const data = useMemo(() => {
       return {
         insertAdjacent: 'afterEnd',
-        schema,
+        schema: schema.parent?.parent?.['x-component'] === 'BlockTemplate' ? schema.parent?.parent : schema,
         removeParentsIfNoChildren: removeParentsIfNoChildren ?? true,
       };
     }, [schema, removeParentsIfNoChildren]);

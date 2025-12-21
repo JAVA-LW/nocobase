@@ -14,6 +14,7 @@ import {
   BulkCreateOptions,
   ModelStatic,
   Op,
+  QueryTypes,
   Sequelize,
   FindAndCountOptions as SequelizeAndCountOptions,
   CountOptions as SequelizeCountOptions,
@@ -49,6 +50,7 @@ import { RelationRepository } from './relation-repository/relation-repository';
 import { updateAssociations, updateModelByValues } from './update-associations';
 import { UpdateGuard } from './update-guard';
 import { valuesToFilter } from './utils/filter-utils';
+import { processIncludes } from './utils';
 
 const debug = require('debug')('noco-database');
 
@@ -291,7 +293,9 @@ export class Repository<TModelAttributes extends {} = any, TCreationAttributes e
       distinct: Boolean(this.collection.model.primaryKeyAttribute) && !this.collection.isMultiFilterTargetKey(),
     };
 
-    if (queryOptions.include?.length === 0) {
+    if (Array.isArray(queryOptions.include) && queryOptions.include.length > 0) {
+      queryOptions.include = processIncludes(queryOptions.include, this.collection.model);
+    } else {
       delete queryOptions.include;
     }
 
@@ -300,6 +304,87 @@ export class Repository<TModelAttributes extends {} = any, TCreationAttributes e
       ...queryOptions,
       transaction,
     });
+  }
+
+  async getEstimatedRowCount() {
+    if (_.isFunction(this.collection['isSql']) && this.collection['isSql']()) {
+      return 0;
+    }
+    if (_.isFunction(this.collection['isView']) && this.collection['isView']()) {
+      return 0;
+    }
+    const tableName = this.collection.tableName();
+    try {
+      if (this.database.isMySQLCompatibleDialect()) {
+        const results: any[] = await this.database.sequelize.query(
+          `
+        SELECT table_rows FROM information_schema.tables
+        WHERE table_schema = DATABASE()
+          AND table_name = ?
+      `,
+          { replacements: [tableName], type: QueryTypes.SELECT },
+        );
+        return Number(results?.[0]?.[this.database.inDialect('mysql') ? 'TABLE_ROWS' : 'table_rows'] ?? 0);
+      }
+      if (this.database.isPostgresCompatibleDialect()) {
+        const results: any[] = await this.database.sequelize.query(
+          `
+        SELECT reltuples::BIGINT AS estimate
+        FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+        WHERE c.relname = ? AND n.nspname = ?;
+      `,
+          { replacements: [tableName, this.collection.collectionSchema()], type: QueryTypes.SELECT, logging: true },
+        );
+        return Number(results?.[0]?.estimate ?? 0);
+      }
+
+      if (this.database.sequelize.getDialect() === 'mssql') {
+        const results: any[] = await this.database.sequelize.query(
+          `
+        SELECT SUM(row_count) AS estimate
+        FROM sys.dm_db_partition_stats
+        WHERE object_id = OBJECT_ID(?) AND (index_id = 0 OR index_id = 1)
+      `,
+          { replacements: [tableName], type: QueryTypes.SELECT },
+        );
+        return Number(results?.[0]?.estimate ?? 0);
+      }
+
+      if (this.database.sequelize.getDialect() === 'oracle') {
+        const tableName = this.collection.name.toUpperCase();
+        const schemaName = (await this.getOracleSchema()).toUpperCase();
+
+        await this.database.sequelize.query(`BEGIN DBMS_STATS.GATHER_TABLE_STATS(:schema, :table); END;`, {
+          replacements: { schema: schemaName, table: tableName },
+          type: QueryTypes.RAW,
+        });
+
+        const results: any[] = await this.database.sequelize.query(
+          `
+      SELECT NUM_ROWS AS "estimate"
+      FROM ALL_TABLES
+      WHERE TABLE_NAME = :table AND OWNER = :schema
+      `,
+          {
+            replacements: { table: tableName, schema: schemaName },
+            type: QueryTypes.SELECT,
+          },
+        );
+        return Number(results?.[0]?.estimate ?? 0);
+      }
+    } catch (error) {
+      this.database.logger.error(`Failed to get estimated row count for ${this.collection.name}:`, error);
+      return 0;
+    }
+
+    return 0;
+  }
+
+  private async getOracleSchema(): Promise<string> {
+    const [result] = await this.database.sequelize.query(`SELECT USER FROM DUAL`, {
+      type: QueryTypes.SELECT,
+    });
+    return result?.['USER'] ?? '';
   }
 
   async aggregate(options: AggregateOptions & { optionsTransformer?: (options: any) => any }): Promise<any> {
@@ -442,6 +527,9 @@ export class Repository<TModelAttributes extends {} = any, TCreationAttributes e
       subQuery: false,
       ...this.buildQueryOptions(options),
     };
+    if (!_.isUndefined(opts.limit)) {
+      opts.limit = Number(opts.limit);
+    }
 
     let rows;
 
@@ -554,6 +642,10 @@ export class Repository<TModelAttributes extends {} = any, TCreationAttributes e
     return this.create({ values, transaction, context, ...rest });
   }
 
+  private validate(options: { values: Record<string, any>[]; operation: 'create' | 'update' }) {
+    this.collection.validate(options);
+  }
+
   /**
    * Save instance to database
    *
@@ -568,7 +660,6 @@ export class Repository<TModelAttributes extends {} = any, TCreationAttributes e
         records: options.values,
       });
     }
-
     const transaction = await this.getTransaction(options);
 
     const guard = UpdateGuard.fromOptions(this.model, {
@@ -578,7 +669,7 @@ export class Repository<TModelAttributes extends {} = any, TCreationAttributes e
     });
 
     const values = (this.model as typeof Model).callSetters(guard.sanitize(options.values || {}), options);
-
+    this.validate({ values: values as any, operation: 'create' });
     const instance = await this.model.create<any>(values, {
       ...options,
       transaction,
@@ -644,13 +735,12 @@ export class Repository<TModelAttributes extends {} = any, TCreationAttributes e
         records: options.values,
       });
     }
-
     const transaction = await this.getTransaction(options);
 
     const guard = UpdateGuard.fromOptions(this.model, { ...options, underscored: this.collection.options.underscored });
 
     const values = (this.model as typeof Model).callSetters(guard.sanitize(options.values || {}), options);
-
+    this.validate({ values: values as any, operation: 'update' });
     // NOTE:
     // 1. better to be moved to separated API like bulkUpdate/updateMany
     // 2. strictly `false` comparing for compatibility of legacy api invoking

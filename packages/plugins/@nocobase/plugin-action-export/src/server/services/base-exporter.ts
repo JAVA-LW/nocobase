@@ -22,6 +22,7 @@ import path from 'path';
 import os from 'os';
 import { Logger } from '@nocobase/logger';
 import _ from 'lodash';
+import { Field, RelationField } from '@nocobase/database';
 
 export type ExportOptions = {
   collectionManager: ICollectionManager;
@@ -94,7 +95,7 @@ abstract class BaseExporter<T extends ExportOptions = ExportOptions> extends Eve
                 )}`,
               );
             } else {
-              this.logger?.info(`Query completed in ${executionTime}ms, fetched ${rows.length} records`);
+              this.logger?.trace(`Query completed in ${executionTime}ms, fetched ${rows.length} records`);
             }
             this._batchQueryStartTime = null;
           }
@@ -106,9 +107,9 @@ abstract class BaseExporter<T extends ExportOptions = ExportOptions> extends Eve
             const diff = process.hrtime(startTime);
             const executionTime = (diff[0] * 1000 + diff[1] / 1000000).toFixed(2);
             if (Number(executionTime) > 500) {
-              this.logger?.info(`HandleRow took too long, completed in ${executionTime}ms`);
+              this.logger?.debug(`HandleRow took too long, completed in ${executionTime}ms`);
             } else {
-              this.logger?.info(`HandleRow completed, ${executionTime}ms`);
+              this.logger?.trace(`HandleRow completed, ${executionTime}ms`);
             }
           }
           this.emit('progress', {
@@ -119,7 +120,7 @@ abstract class BaseExporter<T extends ExportOptions = ExportOptions> extends Eve
           const elapsedSeconds = totalDiff[0] + totalDiff[1] / 1e9;
           const estimatedTimeRemaining = (elapsedSeconds * (total - current)) / current;
 
-          this.logger?.info(
+          this.logger?.trace(
             `Processed ${current}/${total} records (${Math.round((current / total) * 100)}%), ` +
               `elapsed time: ${elapsedSeconds.toFixed(2)}s, ` +
               `estimated remaining: ${estimatedTimeRemaining.toFixed(2)}s`,
@@ -198,22 +199,19 @@ abstract class BaseExporter<T extends ExportOptions = ExportOptions> extends Eve
 
   protected findFieldByDataIndex(dataIndex: Array<string>): IField {
     const { collection } = this.options;
-    const currentField = collection.getField(dataIndex[0]);
-
-    if (dataIndex.length > 1) {
-      let targetCollection: ICollection;
-
-      for (let i = 0; i < dataIndex.length; i++) {
-        const isLast = i === dataIndex.length - 1;
-
-        if (isLast) {
-          return targetCollection.getField(dataIndex[i]);
-        }
-
-        targetCollection = (currentField as IRelationField).targetCollection();
-      }
+    let currentField = collection.getField(dataIndex[0]);
+    if (dataIndex.length === 1) {
+      return currentField;
     }
 
+    let targetCollection = (currentField as RelationField).targetCollection();
+    for (let i = 1; i < dataIndex.length; i++) {
+      currentField = targetCollection.getField(dataIndex[i]);
+      const isLast = i === dataIndex.length - 1;
+      if (!isLast && currentField instanceof RelationField) {
+        targetCollection = currentField.targetCollection();
+      }
+    }
     return currentField;
   }
 
@@ -252,7 +250,11 @@ abstract class BaseExporter<T extends ExportOptions = ExportOptions> extends Eve
     return render(value);
   }
 
-  public generateOutputPath(prefix = 'export', ext = '', destination = os.tmpdir()): string {
+  public generateOutputPath(
+    prefix = 'export',
+    ext = '',
+    destination = path.join(process.cwd(), 'storage', 'tmp'),
+  ): string {
     const fileName = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
     return path.join(destination, fileName);
   }

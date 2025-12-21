@@ -272,6 +272,7 @@ export const LayoutContent = () => {
 const NocoBaseLogo = () => {
   const result = useSystemSettings();
   const { token } = useToken();
+  const { t } = useTranslation('lm-collections');
   const fontSizeStyle = useMemo(() => ({ fontSize: token.fontSizeHeading3 }), [token.fontSizeHeading3]);
 
   const hasLogo = result?.data?.data?.logo?.url;
@@ -279,7 +280,7 @@ const NocoBaseLogo = () => {
     <img className={className2} src={result?.data?.data?.logo?.url} />
   ) : (
     <span style={fontSizeStyle} className={className3}>
-      {result?.data?.data?.title}
+      {t(result?.data?.data?.title)}
     </span>
   );
 
@@ -328,7 +329,7 @@ const GroupItem: FC<{ item: any }> = (props) => {
             <Badge
               {...item._route.options.badge}
               count={badgeCount}
-              style={{ marginLeft: 4, color: item._route.options?.badge?.textColor }}
+              style={{ marginLeft: 4, color: item._route.options?.badge?.textColor, maxWidth: '10em' }}
               dot={false}
             ></Badge>
           )}
@@ -346,7 +347,7 @@ const WithTooltip: FC<{ title: string; hidden: boolean; badgeProps: any }> = (pr
       {(context) =>
         context.collapsed && !props.hidden && !inHeader ? (
           <Tooltip title={props.title} placement="right">
-            <Badge {...props.badgeProps} style={{ transform: 'none' }} dot={false}>
+            <Badge {...props.badgeProps} style={{ transform: 'none', maxWidth: '10em' }} dot={false}>
               {props.children}
             </Badge>
           </Tooltip>
@@ -438,7 +439,7 @@ const MenuItem: FC<{ item: any; options: { isMobile: boolean; collapsed: boolean
               <Badge
                 {...item._route.options?.badge}
                 count={badgeCount}
-                style={{ marginLeft: 4, color: item._route.options?.badge?.textColor }}
+                style={{ marginLeft: 4, color: item._route.options?.badge?.textColor, maxWidth: '10em' }}
                 dot={false}
               ></Badge>
             )}
@@ -469,7 +470,7 @@ const MenuItem: FC<{ item: any; options: { isMobile: boolean; collapsed: boolean
           {badgeCount != null && (
             <Badge
               {...badgeProps}
-              style={{ marginLeft: 4, color: item._route.options?.badge?.textColor }}
+              style={{ marginLeft: 4, color: item._route.options?.badge?.textColor, maxWidth: '10em' }}
               dot={false}
             ></Badge>
           )}
@@ -673,7 +674,7 @@ export const InternalAdminLayout = () => {
   const location = useLocation();
   const { onDragEnd } = useMenuDragEnd();
   const { token } = useToken();
-  const { isMobileLayout, setIsMobileLayout } = useMobileLayout();
+  const { isMobileLayout } = useMobileLayout();
   const [collapsed, setCollapsed] = useState(isMobileLayout);
   const doNotChangeCollapsedRef = useRef(false);
   const { t } = useMenuTranslation();
@@ -699,12 +700,12 @@ export const InternalAdminLayout = () => {
         colorHeaderTitle: token.colorTextHeaderMenu,
       },
       sider: {
-        colorMenuBackground: token.colorBgContainer,
-        colorTextMenu: token.colorText,
-        colorTextMenuSelected: token.colorPrimary,
-        colorBgMenuItemSelected: token.colorPrimaryBg,
-        colorBgMenuItemActive: token.colorPrimaryBg,
-        colorBgMenuItemHover: token.colorBgTextHover,
+        colorMenuBackground: token.colorBgSider,
+        colorTextMenu: token.colorTextSiderMenu,
+        colorTextMenuSelected: token.colorTextSiderMenuActive,
+        colorBgMenuItemSelected: token.colorBgSiderMenuActive,
+        colorBgMenuItemActive: token.colorBgSiderMenuActive,
+        colorBgMenuItemHover: token.colorBgSiderMenuHover,
       },
       bgLayout: token.colorBgLayout,
     };
@@ -766,20 +767,22 @@ export const InternalAdminLayout = () => {
         onCollapse={onCollapse}
         collapsed={collapsed}
         onPageChange={onPageChange}
+        menu={{
+          // 1.x 暂默认禁用菜单手风琴效果，2.x 支持配置
+          autoClose: false,
+        }}
         menuProps={menuProps}
       >
         <RouteContext.Consumer>
           {(value: RouteContextType) => {
-            const { isMobile: _isMobile } = value;
-
-            if (_isMobile !== isMobileLayout) {
-              setIsMobileLayout(_isMobile);
-            }
+            const { isMobile } = value;
 
             return (
-              <ConfigProvider theme={_isMobile ? mobileTheme : theme}>
-                <LayoutContent />
-              </ConfigProvider>
+              <SetIsMobileLayout isMobile={isMobile}>
+                <ConfigProvider theme={isMobile ? mobileTheme : theme}>
+                  <LayoutContent />
+                </ConfigProvider>
+              </SetIsMobileLayout>
             );
           }}
         </RouteContext.Consumer>
@@ -787,6 +790,21 @@ export const InternalAdminLayout = () => {
     </DndContext>
   );
 };
+
+/**
+ * 用来调用 setIsMobileLayout 的组件
+ * @param props
+ * @returns
+ */
+function SetIsMobileLayout(props: { isMobile: boolean; children: any }) {
+  const { setIsMobileLayout } = useMobileLayout();
+
+  useEffect(() => {
+    setIsMobileLayout(props.isMobile);
+  }, [props.isMobile, setIsMobileLayout]);
+
+  return props.children;
+}
 
 const NavigateToDefaultPage: FC = (props) => {
   const { allAccessRoutes } = useAllAccessDesktopRoutes();

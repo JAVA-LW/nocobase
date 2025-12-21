@@ -13,6 +13,7 @@ import path from 'path';
 import fs from 'fs/promises';
 
 import Application from './application';
+import { SystemLogger } from '@nocobase/logger';
 import { sleep } from '@nocobase/utils';
 
 export const QUEUE_DEFAULT_INTERVAL = 250;
@@ -25,7 +26,7 @@ export type QueueCallbackOptions = {
   signal?: AbortSignal;
 };
 
-export type QueueCallback = (message: any, options: QueueCallbackOptions) => Promise<void> | void;
+export type QueueCallback = (message: any, options: QueueCallbackOptions) => Promise<void>;
 
 export type QueueEventOptions = {
   /**
@@ -33,6 +34,12 @@ export type QueueEventOptions = {
    */
   interval?: number;
   concurrency?: number;
+  /**
+   * Shared across multiple applications.
+   * Will not use app prefix for channel name.
+   * @experimental
+   */
+  shared?: boolean;
   idle(): boolean;
   process: QueueCallback;
 };
@@ -62,7 +69,7 @@ export class MemoryEventQueueAdapter implements IEventQueueAdapter {
 
   private emitter: EventEmitter = new EventEmitter();
 
-  private reading: Map<string, Promise<void>> = new Map();
+  private reading: Map<string, Promise<void>[]> = new Map();
 
   protected events: Map<string, QueueEventOptions> = new Map();
 
@@ -82,32 +89,43 @@ export class MemoryEventQueueAdapter implements IEventQueueAdapter {
     return path.resolve(process.cwd(), 'storage', 'apps', this.options.appName, 'event-queue.json');
   }
 
-  listen = async (channel: string) => {
+  listen = (channel: string) => {
     if (!this.connected) {
       return;
     }
-    if (this.reading.has(channel)) {
-      console.debug(`memory queue (${channel}) is already reading, waiting last reading to end...`);
-      await this.reading.get(channel);
-    }
+    const { logger } = this.options;
     const event = this.events.get(channel);
     if (!event) {
-      console.warn(`memory queue (${channel}) not found, skipping...`);
+      logger.warn(`memory queue (${channel}) not found, skipping...`);
       return;
     }
     if (!event.idle()) {
-      console.debug(`memory queue (${channel}) is not idle, skipping...`);
-      // setTimeout(() => {
-      //   this.emitter.emit(channel, channel);
-      // }, event.interval || QUEUE_DEFAULT_INTERVAL);
       return;
     }
-    const reading = this.read(channel);
+
+    const reading = this.reading.get(channel) || [];
+    const count = (event.concurrency || QUEUE_DEFAULT_CONCURRENCY) - reading.length;
+    if (count <= 0) {
+      // logger.debug(
+      //   `memory queue (${channel}) is already reading as max concurrency (${reading.length}), waiting last reading to end...`,
+      // );
+      return;
+    }
+    logger.debug(`reading more from queue (${channel}), count: ${count}`);
+    this.read(channel, count).forEach((promise) => {
+      reading.push(promise);
+      // eslint-disable-next-line promise/catch-or-return
+      promise.finally(() => {
+        const index = reading.indexOf(promise);
+        if (index > -1) {
+          reading.splice(index, 1);
+        }
+      });
+    });
     this.reading.set(channel, reading);
-    await reading;
   };
 
-  constructor(private options: { appName: string }) {
+  constructor(private options: { appName: string; logger: SystemLogger }) {
     this.emitter.setMaxListeners(0);
   }
 
@@ -122,20 +140,21 @@ export class MemoryEventQueueAdapter implements IEventQueueAdapter {
   async loadFromStorage() {
     let queues = {};
     let exists = false;
+    const { logger } = this.options;
     try {
       await fs.stat(this.storagePath);
       exists = true;
     } catch (ex) {
-      console.info(`memory queue storage file not found, skip`);
+      logger.info(`memory queue storage file not found, skip`);
     }
     if (exists) {
       try {
         const queueJson = await fs.readFile(this.storagePath);
         queues = JSON.parse(queueJson.toString());
-        console.debug('memory queue loaded from storage', queues);
+        logger.debug('memory queue loaded from storage', queues);
         await fs.unlink(this.storagePath);
       } catch (ex) {
-        console.error('failed to load queue from storage', ex);
+        logger.error('failed to load queue from storage', ex);
       }
     }
     this.queues = new Map(Object.entries(queues));
@@ -149,12 +168,13 @@ export class MemoryEventQueueAdapter implements IEventQueueAdapter {
       return acc;
     }, {});
 
+    const { logger } = this.options;
     if (Object.keys(queues).length) {
       await fs.mkdir(path.dirname(this.storagePath), { recursive: true });
       await fs.writeFile(this.storagePath, JSON.stringify(queues));
-      console.debug('memory queue saved to storage', queues);
+      logger.debug('memory queue saved to storage', queues);
     } else {
-      console.debug('memory queue empty, no need to save to storage');
+      logger.debug('memory queue empty, no need to save to storage');
     }
   }
 
@@ -182,14 +202,18 @@ export class MemoryEventQueueAdapter implements IEventQueueAdapter {
   }
 
   async close() {
+    if (!this.connected) {
+      return;
+    }
+    const { logger } = this.options;
     this.connected = false;
     if (this.processing) {
-      console.info('memory queue waiting for processing job...');
+      logger.info('memory queue waiting for processing job...');
       await this.processing;
-      console.info('memory queue job cleaned');
+      logger.info('memory queue job cleaned');
     }
 
-    console.log('memory queue gracefully shutting down...');
+    logger.info('memory queue gracefully shutting down...');
     await this.saveToStorage();
   }
 
@@ -220,6 +244,7 @@ export class MemoryEventQueueAdapter implements IEventQueueAdapter {
   publish(channel: string, content: any, options: QueueMessageOptions = { timestamp: Date.now() }) {
     const event = this.events.get(channel);
     if (!event) {
+      console.debug(`memory queue (${channel}) not subscribed, skip`);
       return;
     }
     if (!this.queues.get(channel)) {
@@ -228,7 +253,8 @@ export class MemoryEventQueueAdapter implements IEventQueueAdapter {
     const queue = this.queues.get(channel);
     const message = { id: randomUUID(), content, options };
     queue.push(message);
-    console.debug(`memory queue (${channel}) published message`, content);
+    const { logger } = this.options;
+    logger.debug(`memory queue (${channel}) published message`, content);
 
     setImmediate(() => {
       this.emitter.emit(channel, channel);
@@ -242,7 +268,7 @@ export class MemoryEventQueueAdapter implements IEventQueueAdapter {
 
       const queue = this.queues.get(channel);
       if (event.idle() && queue?.length) {
-        await this.listen(channel);
+        this.listen(channel);
       }
 
       if (once) {
@@ -252,49 +278,48 @@ export class MemoryEventQueueAdapter implements IEventQueueAdapter {
     }
   }
 
-  async read(channel: string) {
-    const event = this.events.get(channel);
-    if (!event) {
-      this.reading.delete(channel);
-      return;
-    }
+  read(channel: string, n: number): Promise<void>[] {
     const queue = this.queues.get(channel);
 
-    if (queue?.length) {
-      const messages = queue.slice(0, event.concurrency || QUEUE_DEFAULT_CONCURRENCY);
-      console.debug(`memory queue (${channel}) read ${messages.length} messages`, messages);
-      queue.splice(0, messages.length);
-      const batch = messages.map(({ id, ...message }) => this.process(channel, { id, message }));
-      await Promise.all(batch);
+    if (!queue?.length) {
+      return [];
     }
-    this.reading.delete(channel);
+    const { logger } = this.options;
+    const messages = queue.slice(0, n);
+    logger.debug(`memory queue (${channel}) read ${messages.length} messages`, messages);
+    queue.splice(0, messages.length);
+    const batch = messages.map(({ id, ...message }) => this.process(channel, { id, message }));
+    return batch;
   }
 
   async process(channel: string, { id, message }) {
     const event = this.events.get(channel);
     const { content, options: { timeout = QUEUE_DEFAULT_ACK_TIMEOUT, maxRetries = 0, retried = 0 } = {} } = message;
-    try {
-      console.debug(`memory queue (${channel}) processing message (${id})...`, content);
-      await event.process(content, {
+    const { logger } = this.options;
+    logger.debug(`memory queue (${channel}) processing message (${id})...`, content);
+    return (async () =>
+      event.process(content, {
         id,
         retried,
         signal: AbortSignal.timeout(timeout),
+      }))()
+      .then(() => {
+        logger.debug(`memory queue (${channel}) consumed message (${id})`);
+      })
+      .catch((ex) => {
+        if (maxRetries > 0 && retried < maxRetries) {
+          const currentRetry = retried + 1;
+          logger.warn(
+            `memory queue (${channel}) consum message (${id}) failed, retrying (${currentRetry} / ${maxRetries})...`,
+            ex,
+          );
+          setTimeout(() => {
+            this.publish(channel, content, { timeout, maxRetries, retried: currentRetry, timestamp: Date.now() });
+          }, 500);
+        } else {
+          logger.error(ex);
+        }
       });
-      console.debug(`memory queue (${channel}) consumed message (${id})`);
-    } catch (ex) {
-      if (maxRetries > 0 && retried < maxRetries) {
-        const currentRetry = retried + 1;
-        console.warn(
-          `memory queue (${channel}) consum message (${id}) failed, retrying (${currentRetry} / ${maxRetries})...`,
-          ex,
-        );
-        setImmediate(() => {
-          this.publish(channel, content, { timeout, maxRetries, retried: currentRetry, timestamp: Date.now() });
-        });
-      } else {
-        console.error(ex);
-      }
-    }
   }
 }
 
@@ -310,17 +335,20 @@ export class EventQueue {
     protected app: Application,
     protected options: EventQueueOptions = {},
   ) {
-    this.setAdapter(new MemoryEventQueueAdapter({ appName: this.app.name }));
+    this.setAdapter(new MemoryEventQueueAdapter({ appName: this.app.name, logger: this.app.logger }));
 
     app.on('afterStart', async () => {
       await this.connect();
     });
-    app.on('beforeStop', async () => {
+    app.on('afterStop', async () => {
       app.logger.info('[queue] gracefully shutting down...');
       await this.close();
     });
   }
-  getFullChannel(channel: string) {
+  getFullChannel(channel: string, shared = false) {
+    if (shared) {
+      return [this.channelPrefix, channel].filter(Boolean).join('.');
+    }
     return [this.app.name, this.channelPrefix, channel].filter(Boolean).join('.');
   }
   setAdapter<A extends IEventQueueAdapter>(adapter: A) {
@@ -337,9 +365,10 @@ export class EventQueue {
       throw new Error('no adapter set, cannot connect');
     }
     await this.adapter.connect();
+    this.app.logger.debug(`connected to adapter, using memory? ${this.adapter instanceof MemoryEventQueueAdapter}`);
 
     for (const [channel, event] of this.events.entries()) {
-      this.adapter.subscribe(this.getFullChannel(channel), event);
+      this.adapter.subscribe(this.getFullChannel(channel, event.shared), event);
     }
   }
   async close() {
@@ -347,8 +376,8 @@ export class EventQueue {
       return;
     }
     await this.adapter.close();
-    for (const channel of this.events.keys()) {
-      this.adapter.unsubscribe(this.getFullChannel(channel));
+    for (const [channel, event] of this.events.entries()) {
+      this.adapter.unsubscribe(this.getFullChannel(channel, event.shared));
     }
   }
   subscribe(channel: string, options: QueueEventOptions) {
@@ -359,7 +388,7 @@ export class EventQueue {
     this.events.set(channel, options);
 
     if (this.isConnected()) {
-      this.adapter.subscribe(this.getFullChannel(channel), options);
+      this.adapter.subscribe(this.getFullChannel(channel, options.shared), this.events.get(channel));
     }
   }
   unsubscribe(channel: string) {
@@ -369,7 +398,7 @@ export class EventQueue {
     this.events.delete(channel);
 
     if (this.isConnected()) {
-      this.adapter.unsubscribe(this.getFullChannel(channel));
+      this.adapter.unsubscribe(this.getFullChannel(channel, this.events.get(channel)?.shared));
     }
   }
   async publish(channel: string, message: any, options: QueueMessageOptions = {}) {
@@ -379,8 +408,12 @@ export class EventQueue {
     if (!this.isConnected()) {
       throw new Error('event queue not connected, cannot publish');
     }
-    const c = this.getFullChannel(channel);
-    this.app.logger.debug('event queue publishing:', { channel: c, message });
+    const event = this.events.get(channel);
+    if (!event) {
+      throw new Error(`event queue not subscribed on channel "${channel}", cannot publish`);
+    }
+    const c = this.getFullChannel(channel, event.shared);
+    this.app.logger.debug(`event queue publishing to channel(${c})`, { message });
     await this.adapter.publish(c, message, {
       timeout: QUEUE_DEFAULT_ACK_TIMEOUT,
       ...options,

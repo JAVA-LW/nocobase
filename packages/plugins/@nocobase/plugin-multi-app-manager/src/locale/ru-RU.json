@@ -1,0 +1,18 @@
+{
+  "An independent JWT secret ensures data and session isolation from other applications.": "An independent JWT secret ensures data and session isolation from other applications.",
+  "App ID": "ID приложения",
+  "App display name": "Отображаемое имя приложения",
+  "Applications": "Приложения",
+  "Authentication options": "Authentication options",
+  "Auto start": "Автозапуск",
+  "Automatically generate a JWT secret": "Automatically generate a JWT secret",
+  "Custom domain": "Пользовательский домен",
+  "JWT secret": "JWT secret",
+  "Manage applications": "Управление приложениями",
+  "Multi-app manager": "Менеджер многоприложений",
+  "Pin to menu": "Закрепить в меню",
+  "Standalone deployment": "Автономное развертывание",
+  "Start mode": "Режим запуска",
+  "Start on first visit": "Запускать при первом посещении",
+  "Start with main application": "Запускать вместе с главным приложением"
+}

@@ -240,10 +240,14 @@ function useOptions(scope, opts) {
   };
 }
 
-export function useWorkflowVariableOptions(options: UseVariableOptions = {}) {
+export function useWorkflowVariableOptions(
+  options: UseVariableOptions = {},
+  preset: VariableOption[] = [],
+): VariableOption[] {
   const fieldNames = Object.assign({}, defaultFieldNames, options.fieldNames ?? {});
   const opts = Object.assign(options, { fieldNames });
   const result = [
+    ...preset,
     useOptions(scopeOptions, opts),
     useOptions(nodesOptions, opts),
     useOptions(triggerOptions, opts),
@@ -281,10 +285,14 @@ function getNormalizedFields(collectionName, { compile, collectionManager }) {
       if (foreignKeyFieldIndex > -1) {
         const foreignKeyField = foreignKeyFields[foreignKeyFieldIndex];
         result.splice(i, 0, {
-          ...field,
           ...foreignKeyField,
+          target: field.target,
+          targetKey: field.targetKey,
+          interface: foreignKeyField.interface ?? field.interface,
+          isForeignKey: true,
           uiSchema: {
             ...field.uiSchema,
+            ...foreignKeyField.uiSchema,
             title: foreignKeyField.uiSchema?.title ? compile(foreignKeyField.uiSchema?.title) : foreignKeyField.name,
           },
         });

@@ -42,6 +42,7 @@ import { useGetAriaLabelOfAddButton, useWorkflowExecuted } from '../hooks';
 import { lang } from '../locale';
 import useStyles from '../style';
 import { UseVariableOptions, VariableOption, WorkflowVariableInput } from '../variable';
+import { useRemoveNodeContext } from '../RemoveNodeContext';
 
 export type NodeAvailableContext = {
   engine: WorkflowPlugin;
@@ -197,57 +198,57 @@ export function RemoveButton() {
   const current = useNodeContext();
   const { modal } = App.useApp();
   const executed = useWorkflowExecuted();
-
-  const resource = api.resource('flow_nodes');
+  const removeNodeContext = useRemoveNodeContext();
 
   const onOk = useCallback(async () => {
-    await resource.destroy?.({
+    await api.resource('flow_nodes').destroy?.({
       filterByTk: current.id,
     });
     refresh();
-  }, [current.id, refresh, resource]);
+  }, [current.id, refresh, api]);
 
   const onRemove = useCallback(async () => {
-    const usingNodes = nodes.filter((node) => {
-      if (node === current) {
-        return false;
+    const branches = nodes.filter((item) => item.upstream === current && item.branchIndex != null);
+    if (!branches.length) {
+      const usingNodes = nodes.filter((node) => {
+        if (node === current) {
+          return false;
+        }
+
+        const template = parse(node.config);
+        const refs = template.parameters.filter(
+          ({ key }) =>
+            key.startsWith(`$jobsMapByNodeKey.${current.key}.`) || key === `$jobsMapByNodeKey.${current.key}`,
+        );
+        return refs.length;
+      });
+
+      if (usingNodes.length) {
+        modal.error({
+          title: lang('Can not delete'),
+          content: lang(
+            'The result of this node has been referenced by other nodes ({{nodes}}), please remove the usage before deleting.',
+            { nodes: usingNodes.map((item) => item.title).join(', ') },
+          ),
+        });
+        return;
       }
 
-      const template = parse(node.config);
-      const refs = template.parameters.filter(
-        ({ key }) => key.startsWith(`$jobsMapByNodeKey.${current.key}.`) || key === `$jobsMapByNodeKey.${current.key}`,
-      );
-      return refs.length;
-    });
-
-    if (usingNodes.length) {
-      modal.error({
-        title: lang('Can not delete'),
-        content: lang(
-          'The result of this node has been referenced by other nodes ({{nodes}}), please remove the usage before deleting.',
-          { nodes: usingNodes.map((item) => item.title).join(', ') },
-        ),
+      modal.confirm({
+        title: t('Delete'),
+        content: t('Are you sure you want to delete it?'),
+        onOk,
       });
-      return;
+    } else {
+      removeNodeContext?.setDeletingNode(current);
     }
+  }, [current, modal, nodes, onOk, removeNodeContext, t]);
 
-    const hasBranches = !nodes.find((item) => item.upstream === current && item.branchIndex != null);
-    const message = hasBranches
-      ? t('Are you sure you want to delete it?')
-      : lang('This node contains branches, deleting will also be preformed to them, are you sure?');
-
-    modal.confirm({
-      title: t('Delete'),
-      content: message,
-      onOk,
-    });
-  }, [current, modal, nodes, onOk, t]);
-
-  if (!workflow) {
+  if (!workflow || executed) {
     return null;
   }
 
-  return executed ? null : (
+  return (
     <Button
       type="text"
       shape="circle"
@@ -264,22 +265,36 @@ export function JobButton() {
   const { jobs } = useNodeContext() ?? {};
   const { styles } = useStyles();
 
+  const onOpenJobInList = useCallback(
+    ({ key }) => {
+      if (!jobs?.length) {
+        return;
+      }
+      const job = jobs.find((item) => item.id == key);
+      setViewJob(job);
+    },
+    [jobs, setViewJob],
+  );
+
+  const onOpenOnlyJob = useCallback(() => {
+    const job = jobs?.[0];
+    if (!job) {
+      return;
+    }
+    setViewJob(job);
+  }, [jobs, setViewJob]);
+
   if (!execution) {
     return null;
   }
 
-  if (!jobs.length) {
+  if (!jobs?.length) {
     return <StatusButton className={styles.nodeJobButtonClass} disabled />;
-  }
-
-  function onOpenJob({ key }) {
-    const job = jobs.find((item) => item.id == key);
-    setViewJob(job);
   }
 
   return (
     <Tooltip title={lang('View result')}>
-      {jobs.length > 1 ? (
+      {jobs?.length > 1 ? (
         <Dropdown
           menu={{
             items: jobs.map((job) => {
@@ -293,7 +308,7 @@ export function JobButton() {
                 ),
               };
             }),
-            onClick: onOpenJob,
+            onClick: onOpenJobInList,
             className: styles.dropdownClass,
           }}
         >
@@ -306,8 +321,8 @@ export function JobButton() {
       ) : (
         <StatusButton
           statusMap={JobStatusOptionsMap}
-          status={jobs[0].status}
-          onClick={() => setViewJob(jobs[0])}
+          status={jobs?.[0].status}
+          onClick={onOpenOnlyJob}
           className={styles.nodeJobButtonClass}
         />
       )}
@@ -370,7 +385,11 @@ function VariableReplacer({ name, value, onChange }) {
   return (
     <Space>
       <WorkflowVariableInput variableOptions={{}} value={`{{${name}}}`} disabled />
-      <Variable.Input useTypedConstant={['string', 'number', 'boolean', 'date']} value={value} onChange={onChange} />
+      <Variable.Input
+        useTypedConstant={['string', 'number', 'boolean', 'date', 'object']}
+        value={value}
+        onChange={onChange}
+      />
     </Space>
   );
 }

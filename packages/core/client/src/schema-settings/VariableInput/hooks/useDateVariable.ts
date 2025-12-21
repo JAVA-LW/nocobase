@@ -49,6 +49,13 @@ export const useDateVariable = ({ operator, schema, noDisabled }: Props) => {
       schema: {},
     },
     {
+      key: 'dayBeforeYesterday',
+      value: 'dayBeforeYesterday',
+      label: t('Day before yesterday'),
+      disabled,
+      operators: datetime,
+    },
+    {
       key: 'yesterday',
       value: 'yesterday',
       label: t('Yesterday'),
@@ -248,6 +255,13 @@ export const useDatetimeVariable = ({ operator, schema, noDisabled, targetFieldS
         operators: datetime,
       },
       {
+        key: 'dayBeforeYesterday',
+        value: 'dayBeforeYesterday',
+        label: t('Day before yesterday'),
+        disabled,
+        operators: datetime,
+      },
+      {
         key: 'yesterday',
         value: 'yesterday',
         label: t('Yesterday'),
@@ -268,6 +282,7 @@ export const useDatetimeVariable = ({ operator, schema, noDisabled, targetFieldS
         disabled,
         operators: datetime,
       },
+
       {
         key: 'lastIsoWeek',
         value: 'lastIsoWeek',

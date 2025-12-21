@@ -7,7 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { observer, useField, useFieldSchema } from '@formily/react';
+import { observer, useField, useFieldSchema, SchemaOptionsContext } from '@formily/react';
 import { transformMultiColumnToSingleColumn } from '@nocobase/utils/client';
 import { Select, Space } from 'antd';
 import { differenceBy, unionBy } from 'lodash';
@@ -38,6 +38,10 @@ import { ActionContextProvider } from '../action';
 import { useAssociationFieldContext, useFieldNames, useInsertSchema } from './hooks';
 import schema from './schema';
 import { flatData, getLabelFormatValue, useLabelUiSchema } from './util';
+import { CollectionField } from '../../../data-source/collection-field/CollectionField';
+import { useSchemaOptionsContext } from '../../../schema-component';
+import Radio from '../radio/Radio';
+import Checkbox from '../checkbox/Checkbox';
 
 export const useTableSelectorProps = () => {
   const field: any = useField();
@@ -168,6 +172,13 @@ export const InternalPicker = observer(
       () => (isMobileLayout ? transformMultiColumnToSingleColumn(fieldSchema) : fieldSchema),
       [isMobileLayout, fieldSchema],
     );
+    const option = useSchemaOptionsContext();
+    const components = {
+      ...option.components,
+      'Radio.Group': Radio.Group,
+      'Checkbox.Group': Checkbox.Group,
+      CollectionField: CollectionField,
+    };
 
     return (
       <PopupSettingsProvider enableURL={false}>
@@ -235,7 +246,7 @@ export const InternalPicker = observer(
             <CollectionProvider_deprecated name={collectionField?.target}>
               <FormProvider>
                 <TableSelectorParamsProvider params={{ filter: getFilter() }}>
-                  <SchemaComponentOptions scope={scope}>
+                  <SchemaComponentOptions scope={scope} components={components}>
                     <NocoBaseRecursionField
                       onlyRenderProperties
                       basePath={field.address}

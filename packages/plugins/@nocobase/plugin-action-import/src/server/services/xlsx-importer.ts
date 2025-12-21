@@ -13,14 +13,16 @@ import { ICollection, ICollectionManager, IRelationField } from '@nocobase/data-
 import {
   Collection as DBCollection,
   Database,
+  IntegerField,
   Model,
   MultipleRelationRepository,
+  NumberField,
   RelationRepository,
   Repository,
   UpdateGuard,
   updateAssociations,
 } from '@nocobase/database';
-import { MultiAssociationAccessors, Transaction } from 'sequelize';
+import { MultiAssociationAccessors, Transaction, ValidationError } from 'sequelize';
 import EventEmitter from 'events';
 import { ImportValidationError, ImportError } from '../errors';
 import { Context } from '@nocobase/actions';
@@ -148,6 +150,10 @@ export class XlsxImporter extends EventEmitter {
     if (!autoIncrementAttribute) {
       return;
     }
+    const field = this.options.collection.getField(autoIncrementAttribute);
+    if (field && !(field instanceof NumberField)) {
+      return;
+    }
 
     let hasImportedAutoIncrementPrimary = false;
     for (const importedDataIndex of this.getColumnsByPermission(options?.context)) {
@@ -228,12 +234,12 @@ export class XlsxImporter extends EventEmitter {
     return (this.repository instanceof RelationRepository ? this.repository.targetModel : this.repository.model) as any;
   }
 
-  async handleRowValuesWithColumns(row: any, rowValues: any, options: RunOptions) {
-    for (let index = 0; index < this.options.columns.length; index++) {
-      const column = this.options.columns[index];
+  async handleRowValuesWithColumns(row: any, rowValues: any, options: RunOptions, columns: ImportColumn[]) {
+    for (let index = 0; index < columns.length; index++) {
+      const column = columns[index];
       const field = this.options.collection.getField(column.dataIndex[0]);
       if (!field) {
-        throw new ImportValidationError('Import validation.Field not found', {
+        throw new ImportValidationError('Import validation. Field not found', {
           field: column.dataIndex[0],
         });
       }
@@ -261,7 +267,15 @@ export class XlsxImporter extends EventEmitter {
         ctx.filterKey = column.dataIndex[1];
       }
 
-      rowValues[dataKey] = await interfaceInstance.toValue(this.trimString(str), ctx);
+      try {
+        rowValues[dataKey] = str == null ? null : await interfaceInstance.toValue(this.trimString(str), ctx);
+      } catch (error) {
+        throw new ImportValidationError('Failed to parse field {{field}} in row {{rowIndex}}: {{message}}', {
+          rowIndex: options?.context?.handingRowIndex || 1,
+          field: dataKey,
+          message: error.message,
+        });
+      }
     }
     const model = this.getModel();
     const guard = UpdateGuard.fromOptions(model, {
@@ -286,11 +300,11 @@ export class XlsxImporter extends EventEmitter {
   ) {
     let { handingRowIndex = 1 } = options;
     const { transaction } = runOptions;
+    const columns = this.getColumnsByPermission(options?.context);
     const rows = [];
     for (const row of chunkRows) {
       const rowValues = {};
-      handingRowIndex += 1;
-      await this.handleRowValuesWithColumns(row, rowValues, runOptions);
+      await this.handleRowValuesWithColumns(row, rowValues, runOptions, columns);
       rows.push(rowValues);
     }
 
@@ -305,7 +319,16 @@ export class XlsxImporter extends EventEmitter {
         'Record insertion completed in {time}ms',
       );
       await new Promise((resolve) => setTimeout(resolve, 5));
+      handingRowIndex += chunkRows.length;
     } catch (error) {
+      if (error.name === 'SequelizeUniqueConstraintError') {
+        throw new Error(
+          `${options.context?.t('Unique constraint error, fields:', { ns: 'action-import' })} ${JSON.stringify(
+            error.fields,
+          )}`,
+        );
+      }
+
       this.logger?.error(`Import error at row ${handingRowIndex}: ${error.message}`, {
         rowIndex: handingRowIndex,
         rowData: rows[handingRowIndex],
@@ -314,7 +337,7 @@ export class XlsxImporter extends EventEmitter {
 
       throw new ImportError(`Import failed at row ${handingRowIndex}`, {
         rowIndex: handingRowIndex,
-        rowData: rows[handingRowIndex],
+        rowData: rows[handingRowIndex - (this.options.explain ? 2 : 1)],
         cause: error,
       });
     }
@@ -344,15 +367,10 @@ export class XlsxImporter extends EventEmitter {
       const instance = instances[i];
       const value = values[i];
 
-      await this.loggerService.measureExecutedTime(
-        async () => updateAssociations(instance, value, { transaction }),
-        `Row ${i + 1}: updateAssociations completed in {time}ms`,
-        'debug',
-      );
       if (insertOptions.hooks !== false) {
         await this.loggerService.measureExecutedTime(
           async () => {
-            await db.emit(`${this.repository.collection.name}.afterCreate`, instance, {
+            await db.emitAsync(`${this.repository.collection.name}.afterCreate`, instance, {
               transaction,
             });
             await db.emitAsync(`${this.repository.collection.name}.afterSave`, instance, {
@@ -364,6 +382,13 @@ export class XlsxImporter extends EventEmitter {
           'debug',
         );
       }
+
+      await this.loggerService.measureExecutedTime(
+        async () => updateAssociations(instance, value, { transaction }),
+        `Row ${i + 1}: updateAssociations completed in {time}ms`,
+        'debug',
+      );
+
       if (context?.skipWorkflow !== true) {
         await this.loggerService.measureExecutedTime(
           async () => {
@@ -438,7 +463,7 @@ export class XlsxImporter extends EventEmitter {
     const workbook = this.options.workbook;
     const worksheet = workbook.Sheets[workbook.SheetNames[0]];
 
-    let data = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null }) as string[][];
+    let data = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null, blankrows: false }) as string[][];
 
     // Find and validate header row
     const expectedHeaders = this.getExpectedHeaders(ctx);
@@ -448,7 +473,7 @@ export class XlsxImporter extends EventEmitter {
         headers: expectedHeaders.join(', '),
       });
     }
-    data = this.alignWithHeaders({ data, expectedHeaders, headers });
+    data = this.alignWithHeaders({ data, expectedHeaders, headerRowIndex });
     // Extract data rows
     const rows = data.slice(headerRowIndex + 1);
 
@@ -460,9 +485,20 @@ export class XlsxImporter extends EventEmitter {
     return [headers, ...rows];
   }
 
-  private alignWithHeaders(params: { headers: string[]; expectedHeaders: string[]; data: string[][] }): string[][] {
-    const { expectedHeaders, headers, data } = params;
-    const keepCols = headers.map((x, i) => (expectedHeaders.includes(x) ? i : -1)).filter((i) => i > -1);
+  private alignWithHeaders(params: {
+    data: string[][];
+    expectedHeaders: string[];
+    headerRowIndex: number;
+  }): string[][] {
+    const { data, expectedHeaders, headerRowIndex } = params;
+    const headerRow = data[headerRowIndex];
+    const keepCols = expectedHeaders.map((header) => headerRow.indexOf(header));
+
+    if (keepCols.some((index) => index < 0)) {
+      throw new ImportValidationError('Headers not found. Expected headers: {{headers}}', {
+        headers: expectedHeaders.join(', '),
+      });
+    }
 
     return data.map((row) => keepCols.map((i) => row[i]));
   }
@@ -485,5 +521,7 @@ export class XlsxImporter extends EventEmitter {
         return { headerRowIndex: rowIndex, headers: orderedHeaders };
       }
     }
+
+    return { headerRowIndex: -1, headers: [] };
   }
 }
