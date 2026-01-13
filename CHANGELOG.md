@@ -5,6 +5,104 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.9.36](https://github.com/nocobase/nocobase/compare/v1.9.35...v1.9.36) - 2026-01-10
+
+### 🚀 Improvements
+
+- **[client]** Improve plugin manager list render performance by changing to native webkit css for text ellipsis ([#8391](https://github.com/nocobase/nocobase/pull/8391)) by @mytharcher
+
+### 🐛 Bug Fixes
+
+- **[File manager]** Fix the issue where file URL generated incorrectly for files uploaded to S3 storage ([#8392](https://github.com/nocobase/nocobase/pull/8392)) by @mytharcher
+
+- **[File storage: S3(Pro)]** Fix the issue where file renaming mode not works by @mytharcher
+
+- **[Workflow: Approval]** Fix value block not displays caused by missing `ValueBlock.Result` component by @mytharcher
+
+## [v1.9.35](https://github.com/nocobase/nocobase/compare/v1.9.34...v1.9.35) - 2026-01-09
+
+### 🚀 Improvements
+
+- **[Workflow: Approval]** Simplify parameters in query, and improve performance by @mytharcher
+
+### 🐛 Bug Fixes
+
+- **[Workflow: Webhook]** Fix the issue where 404 error thrown when post to webhook URL in sub-app by @mytharcher
+
+## [v1.9.34](https://github.com/nocobase/nocobase/compare/v1.9.33...v1.9.34) - 2026-01-09
+
+### 🚀 Improvements
+
+- **[Access control]** Improve permission checks when modifying nested association fields ([#7856](https://github.com/nocobase/nocobase/pull/7856)) by @2013xile
+
+### 🐛 Bug Fixes
+
+- **[client]**
+  - fix association fields from external data sources not loading association data in form blocks ([#8356](https://github.com/nocobase/nocobase/pull/8356)) by @katherinehhh
+
+  - Fix the issue where association fields are not correct in `FilterAction` component ([#8295](https://github.com/nocobase/nocobase/pull/8295)) by @mytharcher
+
+- **[logger]** Fix extra error information being discarded when printing system logs ([#8367](https://github.com/nocobase/nocobase/pull/8367)) by @cgyrock
+
+- **[Workflow: Loop node]** Fix the issue where failed node in condition branch cannot pass status to upper branching node ([#8360](https://github.com/nocobase/nocobase/pull/8360)) by @mytharcher
+
+- **[Data source: Main]** View collection metadata should include source field options ([#8337](https://github.com/nocobase/nocobase/pull/8337)) by @2013xile
+
+- **[Workflow]**
+  - Fix linkage rule issue in workflow CC node detail block ([#8381](https://github.com/nocobase/nocobase/pull/8381)) by @zhangzhonghe
+
+  - Add instance ID to the Snowflake ID of jobs, to avoid ID conflict issue under cluster mode ([#8382](https://github.com/nocobase/nocobase/pull/8382)) by @mytharcher
+
+  - Fix the issue where execution page crash when workflow deleted ([#8361](https://github.com/nocobase/nocobase/pull/8361)) by @mytharcher
+
+- **[Action: Import records]** Fix incorrect error message when a  unique constraint error is triggered during async XLSX import ([#8342](https://github.com/nocobase/nocobase/pull/8342)) by @cgyrock
+
+- **[Access control]**
+  - Allow association fields to associate using the target keys ([#8352](https://github.com/nocobase/nocobase/pull/8352)) by @2013xile
+
+  - Fix an issue where data source is incorrectly resolved when processing permissions for association fields ([#8370](https://github.com/nocobase/nocobase/pull/8370)) by @2013xile
+
+- **[Data source: REST API]** Add fault-tolerant for request context, to avoid error thrown when method is not in context by @mytharcher
+
+- **[Action: Export records Pro]** Fix error when sub-applications execute async import/export tasks while the main application does not enable the import/export pro plugin by @cgyrock
+
+- **[Workflow: Approval]** Fix the issue where filter fields not work correctly in tasks center by @mytharcher
+
+## [v1.9.33](https://github.com/nocobase/nocobase/compare/v1.9.32...v1.9.33) - 2026-01-04
+
+### 🎉 New Features
+
+- **[client]** Support plugin-defined maintenance components when the app enters maintenance status ([#8252](https://github.com/nocobase/nocobase/pull/8252)) by @cgyrock
+
+- **[File manager]** Support file renaming method configuration ([#8231](https://github.com/nocobase/nocobase/pull/8231)) by @JAVA-LW
+
+- **[File storage: S3(Pro)]** Add rename mode option for S3 Pro storage by @mytharcher
+
+### 🚀 Improvements
+
+- **[Migration manager]** Improved migration checks, SQL download support, log formatting, and execution process visibility by @cgyrock
+
+### 🐛 Bug Fixes
+
+- **[database]**
+  - Include through scope when querying m2m relationships ([#8277](https://github.com/nocobase/nocobase/pull/8277)) by @2013xile
+
+  - Fix object `appends` in `OptionsParser`, and increase `arrayLimit` for parameters ([#8328](https://github.com/nocobase/nocobase/pull/8328)) by @mytharcher
+
+- **[client]** Fix the issue where error thrown in in filter form block settings of m2m field ([#8282](https://github.com/nocobase/nocobase/pull/8282)) by @mytharcher
+
+- **[Async task manager]** Fix language of canceling background task ([#8245](https://github.com/nocobase/nocobase/pull/8245)) by @mytharcher
+
+- **[File manager]** Fix the issue where error thrown when upload file larger than 5MB to AWS S3 ([#8275](https://github.com/nocobase/nocobase/pull/8275)) by @mytharcher
+
+- **[Workflow]** Fixed database events becoming invalid after refreshing the external data source ([#8207](https://github.com/nocobase/nocobase/pull/8207)) by @cgyrock
+
+- **[Collection: Tree]** Update paths after bulk creating tree collection nodes ([#8267](https://github.com/nocobase/nocobase/pull/8267)) by @2013xile
+
+- **[Data source: External PostgreSQL]** Fixed database events becoming invalid after refreshing the external data source by @cgyrock
+
+- **[Data source: External Oracle]** Fixed database events becoming invalid after refreshing the external data source by @cgyrock
+
 ## [v1.9.32](https://github.com/nocobase/nocobase/compare/v1.9.31...v1.9.32) - 2025-12-24
 
 ### 🎉 New Features
